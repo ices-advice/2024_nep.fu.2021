@@ -1,0 +1,267 @@
+---
+title: "output_02_catch_options"
+author: "WGCSE"
+date: '`r Sys.Date()`'
+output:
+  html_document:
+    toc: true
+    number_sections: true
+    toc_depth: 3
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r libs, message=FALSE, echo=TRUE, warning=FALSE}
+gc()
+rm(list=ls())
+
+library(RODBC)
+library(tidyverse)
+library(lattice)
+library(lubridate)
+library(mapplots)
+library(sp)
+library(sf)
+library(reshape2)
+library(readxl)
+library(knitr)
+library(DataCombine)
+library(lattice)
+library(icesTAF)
+library(magrittr)
+library(viridis)
+library(sessioninfo)
+library(stringr)
+```
+
+
+## Setup options
+
+```{r setupoptions}
+curr.year <- 2024
+dat.year <- curr.year -1
+fu.n <- "FU2021"
+
+save.plots <- T # set it up as T or F whether you want to save the plots when running all the chunks or kniting the document
+save.tables <- T # set it up as T or F whether you want to save the tables "propmature"" and the "L50" into .txt files when running all the chunks or knitting the document
+```
+
+## Introduction
+
+The goals of this R Markdown document are to:
+
+* Calculate catch scenarios for the stock
+* Write TAF data tables
+
+Files before (inside "output_01_assessment_summary"):
+
+* exp.wgcse_FU2021.csv
+
+Files before (inside "bootstrap/data"):
+
+* MSY_nep_stocks.csv
+
+
+Files after (inside "output_02_catch_options"):
+
+* catch.inputs.ADG_FU2021.csv
+* zero_discards.ADG_FU2021.csv
+* recent_discards.ADG_FU2021.csv
+* assess.ADG_FU2021.csv
+
+## Data Work Up
+<a href="#top">Back to top</a>
+
+This markdown documment calculates the catch scenarios for this stock.
+First set up the basis for the forecast tables such as mean weights, discard rates etc.
+Then load the MSY ranges checking that the UWTV survey estimate in relation to Btrigger reference point.
+Calculate the forecast tables for catches assuming recent discard patterns and also catches assuming zero discards.
+
+## Load the data file. 
+<a href="#top">Back to top</a>
+
+This file will have the most recent UWTV survey data and the fishery summary of the previous year.
+This table is outputted in format for Table 5 advice sheet.
+
+```{r data, echo=TRUE, message=FALSE}
+
+fu2021.exp <- read.csv("output/output_01_assessment_summary/exp.wgcse_FU2021.csv")
+
+fu2021.assess <- fu2021.exp[,c("year", "abund", "upper", "lower", "ci", "int.lan.n", "int.dis.n", "removals.n",                                                            "hr","int.lan.wt", "int.dis.wt", "discard.rate.n", "dead.discard.rate.n", "mw.lan", "mw.dis")]
+
+fileOut <- paste("output/output_02_catch_options/fu2021.assess.ADG_", fu.n, ".csv", sep = "")
+if (save.tables == T) {
+    write.table(fu2021.assess, fileOut, sep=",", row.names = F)
+}
+```
+
+## The basis for the catch advice and scenarios. 
+<a href="#top">Back to top</a>
+
+Table 2 in advice sheet for Norway lobster in divisions 7.g and 7.h, functional units 20 and 21. 
+
+```{r Inputs to Catch option table, message=FALSE, warning=FALSE}
+
+# select here the current year for adg
+wgcse.yr <- curr.year
+
+# use for wgcse 
+ #wgcse.yr <-"2024"
+ #wgcse.yr <- as.numeric(wgcse.yr)
+
+# full range
+#land.wt.yrs <- seq(2003,wgcse.yr-1,1)
+#disc.wt.yrs <- seq(2003,wgcse.yr-1,1)
+
+land.wt.yrs <<- seq(curr.year-3, curr.year-1,1)
+disc.wt.yrs <<- seq(curr.year-3, curr.year-1,1)
+
+discard.rate.yrs <- seq(curr.year-3, curr.year-1,1)
+dead.discard.rate.yrs <- seq(curr.year-3, curr.year-1,1)
+prop.removal.ret.yrs <- seq(curr.year-3, curr.year-1,1)
+
+
+stock.abundance <- fu2021.exp$abund[length(fu2021.exp$abund)]
+
+land.mean.wt <- mean(fu2021.exp$mw.lan[fu2021.exp$year %in% land.wt.yrs],na.rm=T)
+disc.mean.wt <- mean(fu2021.exp$mw.dis[fu2021.exp$year %in% land.wt.yrs],na.rm=T)
+
+discard.rate <- mean(fu2021.exp$discard.rate.n[fu2021.exp$year%in% discard.rate.yrs],na.rm=T)
+
+dead.discard.rate <- mean(fu2021.exp$dead.discard.rate.n[fu2021.exp$year %in% dead.discard.rate.yrs],na.rm=T)
+prop.removal.ret.n <- mean(fu2021.exp$prop.removal.ret[fu2021.exp$year %in% prop.removal.ret.yrs], na.rm=T)
+disc.survival <- 25
+
+
+fu2021.catch.inputs<- data.frame(curr.year, stock.abundance, land.mean.wt, disc.mean.wt,discard.rate,dead.discard.rate,disc.survival)
+
+knitr::kable(fu2021.catch.inputs , digits=3)
+
+fileOut <- paste("output/output_02_catch_options/catch.inputs.ADG_", fu.n, ".csv", sep = "")
+if (save.tables == T) {
+    write.table(fu2021.catch.inputs, fileOut, sep=",", row.names = F)
+}
+```
+
+
+## MSY ranges inputs for the forecast tables.
+<a href="#top">Back to top</a>
+
+Calculate MSY approach: when TV abundance < Btrigger = FmsyHR*TVabundance/Btrigger
+Take Harvest Rate reference points points from Stock Annex.
+Calculate F_recent (select recent 3 yrs).
+
+```{r F current calculation, echo=FALSE, message=FALSE, warning=FALSE}
+
+ref <- read.csv("bootstrap/data/intercatch/MSY_nep_stocks.csv")
+
+ref2021<- ref[ref$Stock.code=="nep-2021", c("F_MSY", "MSY_F_lower", "MSY_F_upper", "MSY_Btrigger")]
+
+MSY_Btrigger <- as.numeric(as.character(ref2021$MSY_Btrigger))
+
+
+HR2021 <- cbind(ref2021[,1:3],
+               #"MSY approach"= ref2021$F_MSY*stock.abundance/MSY_Btrigger,
+               #"Flower_Trig"= round(ref2021$MSY_F_lower*stock.abundance/MSY_Btrigger, 3),
+              # "F_recent"= mean (fu22.exp[fu22.exp$year %in% (wgcse.yr-3):(wgcse.yr-1),] $ hr /100),
+               "F_current"= fu2021.exp[fu2021.exp$year==(curr.year-1),] $ hr /100)
+
+row.names(HR2021) <- NULL
+
+HR2021 <- HR2021[, c("F_MSY", "MSY_F_lower", "MSY_F_upper",  "F_current")]
+
+
+#reorder for advice sheet
+HR2021 <- HR2021[,c("F_MSY","MSY_F_lower", "MSY_F_upper", "F_MSY", "F_current")]
+colnames(HR2021)[4] <- "MSY approach"
+colnames(HR2021)[5] <- "F_2023"
+
+knitr::kable(HR2021)
+```
+
+## Table 3: Catch scenarios assuming zero discards.
+<a href="#top">Back to top</a>
+
+Annual catch scenarios. All weights are in tonnes.
+
+```{r table LO, echo=TRUE, message=FALSE, warning=FALSE}
+
+forecast.year <- as.character(curr.year + 1)
+wanted.catch <-  ((100-discard.rate)*(land.mean.wt/100)*stock.abundance*(HR2021))
+unwanted.catch <- ((discard.rate)*(disc.mean.wt/100)*stock.abundance*(HR2021))
+total.catch <- wanted.catch + unwanted.catch
+
+
+
+LO <- rbind(total.catch, wanted.catch, unwanted.catch, HR2021*100, forecast.year)
+LO <- as.data.frame(t(LO))
+#names(LO) <- c("total.catch", "wanted.catch", "unwanted.catch", "HR2021","forecast.year")
+names(LO) <- c("total.catch", "projected landings", "projected discards", "% harvest rate", "forecast.year")
+
+
+for (i in 1:(ncol(LO))){
+LO[,i] <- as.character(LO[,i])
+LO[,i] <- as.numeric(LO[,i])
+if (names(LO)[i] == "% harvest rate"){
+  LO[,i] <- round(LO[,i], 3)
+  } else {
+    LO[,i] <- round(LO[,i])
+  }
+}
+
+
+
+knitr::kable(LO)
+#write.csv(LO, "output/output_02_catch_options/fu2021.zero_discards.ADG.csv")
+```
+
+## Table 3: Catch scenarios assuming recent discards.
+<a href="#top">Back to top</a>
+
+Annual catch scenarios. All weights are in tonnes.
+
+Check stock abundance below Btrigger as this requires extra catch options.
+
+```{r table DA, echo=TRUE, message=FALSE, warning=FALSE}
+
+landings <-  (land.mean.wt/100)*stock.abundance*(100*prop.removal.ret.n)*(HR2021)
+dead.discards <- (disc.mean.wt/100)*stock.abundance*(100*(1-prop.removal.ret.n))*(HR2021)
+surviving.discards <- dead.discards/3
+dead.removals <- landings + dead.discards
+total.catch <- landings+dead.discards+surviving.discards
+
+
+dead.discards <- (disc.mean.wt/100)*stock.abundance*(100*(1-prop.removal.ret.n))*(HR2021)
+surviving.discards <- dead.discards/3
+dead.removals <- landings + dead.discards
+total.catch <- landings+dead.discards+surviving.discards
+
+
+DA <- rbind(total.catch, dead.removals, landings, dead.discards, surviving.discards, HR2021*100, forecast.year)
+DA <- as.data.frame(t(DA))
+names(DA) <- c("total.catch", "dead.removals", "projected landings", "projected dead discards", "projected surviving discards", "% harvest rate", "forecast.year")
+
+# update loop code from MAE
+for (i in 1:(ncol(DA))){
+DA[,i] <- as.character(DA[,i])
+DA[,i] <- as.numeric(DA[,i])
+if (names(DA)[i] == "% harvest rate"){
+  DA[,i] <- round(DA[,i], 3)
+  } else {
+    DA[,i] <- round(DA[,i])
+  }
+}
+
+knitr::kable(DA)
+#knitr::kable(DA[,c(1:4,7)])
+#knitr::kable(DA[,c(5:7)])
+
+write.csv(DA, "output/output_02_catch_options/fu2021.recent.discards.ADG.csv")
+```
+<a href="#top">Back to top</a>

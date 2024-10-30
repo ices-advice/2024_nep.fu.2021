@@ -1,0 +1,198 @@
+---
+title: "model_01_raising to international"
+author: "WGCSE"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    number_sections: true
+    toc_depth: 3
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r libs, message=FALSE, echo=TRUE, warning=FALSE}
+gc()
+rm(list=ls())
+
+library(RODBC)
+library(tidyverse)
+library(lattice)
+library(lubridate)
+library(mapplots)
+library(sp)
+library(sf)
+library(reshape2)
+library(readxl)
+library(knitr)
+library(DataCombine)
+library(lattice)
+library(icesTAF)
+library(magrittr)
+library(viridis)
+library(sessioninfo)
+library(stringr)
+```
+
+# Setup options
+
+```{r setupoptions}
+curr.year <- 2024
+dat.year <- curr.year -1
+fu.n <- "FU2021"
+
+save.plots <- T # set it up as T or F whether you want to save the plots when running all the chunks or kniting the document
+save.tables <- T # set it up as T or F whether you want to save the tables "propmature"" and the "L50" into .txt files when running all the chunks or knitting the document
+```
+
+# Introduction
+
+The goals of this R Markdown document are to:
+
+* Raise national lfd to the international landings and calculate fishery summary table.
+* Write TAF data tables
+
+
+Files before (inside "data_01_exploration"):
+
+* exp.country_FU2021.csv
+
+* international_landings_FU2021.csv
+
+
+Files after (inside "model_01"):
+
+* fishery_summary_FU2021.csv
+* fu2021_mean_wgt_source.png
+
+
+
+## Load data files 
+<a href="#top">Back to top</a>
+
+National annual raised data file.
+International landings data file
+```{r load data, include=FALSE}
+
+alfd.wg <- read.csv("data/data_01_exploration/exp.country_FU2021.csv")
+
+int <- read.csv("data/data_01_exploration/international_landings_FU2021.csv")
+```
+
+
+
+## Now the International Raising Factor
+<a href="#top">Back to top</a>
+
+Scale the combined French and Irish fishery data to international landings.
+Rsiing factors in the order of + 20%.
+```{r raising int, echo=TRUE, warning=FALSE}
+
+dat.comb <- alfd.wg %>% group_by(year) %>% summarise(tot.ln=sum(lan.num),
+                                                 tot.dn=sum(dis.num),
+                                                 tot.lw=sum(lan.wgt),                        
+                                                 tot.dw=sum(dis.wgt))
+
+                                                
+int <- int %>% filter(year >='2012')
+int.dat <- left_join(int, dat.comb, by="year")
+int.dat$rf <- with(int.dat, total/tot.lw)
+
+t <- int.dat[ , c("year", "rf")]
+
+knitr::kable(t, digits=3)
+
+```
+
+
+
+## Assessment Summary data table
+<a href="#top">Back to top</a>
+
+Apply international raising factor and calculate fishery summary.
+Landings and discards by weight (tonne) and number ('000s).
+Estimated mean weight (gr) in landings and discards.
+Discard rates by weight (tonne) and number ('000s) from the raised derived data using the annual discard ogive.
+Removals in number.
+Dead discard rate by weight (tonne) and number ('000s). 
+Proportion Removals retained by number ('000s).
+Discard survival estimated as 25%.
+```{r summary table}
+
+summ <- int.dat %>% mutate(int.lan.n = tot.ln*rf,
+                                int.dis.n = tot.dn*rf,
+                                int.lan.wt = total,
+                                int.dis.wt = tot.dw*rf,
+                                removals.n = (int.dis.n *0.75) + int.lan.n,
+                                prop.removal.ret = int.lan.n /removals.n,
+                                dead.discard.rate.n =  (1- int.lan.n /removals.n)*100,
+                                discard.rate.n = int.dis.n/ (int.lan.n + int.dis.n )*100,
+                              discard.rate.w = int.dis.wt/ (int.lan.wt + int.dis.wt )*100,
+                              mw.lan =int.lan.wt/int.lan.n,
+                              mw.dis=int.dis.wt/int.dis.n)
+
+summ1 <- summ [ , c(1, 8:18)]
+
+knitr::kable(summ1[, c(1:8)], digits=3)
+knitr::kable(summ1[, c(1, 9:12)], digits=3)
+
+fileOut <- paste("model/model_01_raising_to_international/fishery_summary_", fu.n, ".csv", sep = "")
+
+if (save.tables == T) {
+    write.table(summ1, fileOut, sep=",", row.names = F)
+}
+```
+
+
+## Plot mean weights by source.
+
+<a href="#top">Back to top</a>
+
+Combined weight used in assessment.
+```{r mw plot, echo=FALSE, results='true', fig.height=10, fig.width=7, fig.cap="Mean weight (gr) in the sampled catches by source"}
+
+dat1 <- summ1[, c(1, 11, 12)]
+dat1$nation <- "combined"
+dat2 <- alfd.wg[, c(1, 10:12)]
+
+dat3 <- rbind(dat1, dat2)
+
+
+dat.wgt <-  dat3 %>% gather("mw.lan", "var",2:3)
+names(dat.wgt) <- c("year", "source", "type", "wgt")
+
+knitr::kable(dat.wgt, digits=3)
+
+viridis_colors <- viridis_pal()(2)
+
+p <- ggplot(dat.wgt, aes(x=year, y=wgt, group=as.factor(type), colour=factor(type))) + 
+        geom_line(size=.75)  +  theme_bw() + 
+        ylab("Mean weight (grs)") +
+        coord_cartesian(ylim=c(0, 60)) +
+        facet_wrap(~source) +
+  scale_x_continuous(breaks = c(seq(min(dat.wgt$year), max(dat.wgt$year), by = 2), max(dat.wgt$year))) +
+  scale_fill_viridis_d(name = "type", option = "D", end = 0.9)
+ 
+p + theme(axis.text=element_text(size=9),axis.title=element_text(size=9)) + 
+  theme(legend.title=element_blank(), panel.grid=element_blank(), legend.position = "bottom") 
+
+
+if (save.plots == T) {
+  ggsave("model/model_01_raising_to_international/fu2021_mean_wgt_source.png")
+}
+
+```
+
+
+
+## Session
+<a href="#top">Back to top</a>
+```{r info , echo=TRUE, warning=FALSE, fig.height=8, fig.width=8}
+session_info()
+```

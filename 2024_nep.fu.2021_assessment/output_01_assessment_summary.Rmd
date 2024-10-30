@@ -1,0 +1,245 @@
+---
+title: "output_01_assessment_summary"
+author: "WGCSE"
+date: '`r Sys.Date()`'
+output:
+  html_document:
+    toc: true
+    number_sections: true
+    toc_depth: 3
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r libs, message=FALSE, echo=TRUE, warning=FALSE}
+gc()
+rm(list=ls())
+
+library(RODBC)
+library(tidyverse)
+library(lattice)
+library(lubridate)
+library(mapplots)
+library(sp)
+library(sf)
+library(reshape2)
+library(readxl)
+library(knitr)
+library(DataCombine)
+library(lattice)
+library(icesTAF)
+library(magrittr)
+library(viridis)
+library(sessioninfo)
+library(stringr)
+```
+
+# Setup options
+
+```{r setupoptions}
+curr.year <- 2024
+dat.year <- curr.year -1
+fu.n <- "FU2021"
+
+save.plots <- T # set it up as T or F whether you want to save the plots when running all the chunks or kniting the document
+save.tables <- T # set it up as T or F whether you want to save the tables "propmature"" and the "L50" into .txt files when running all the chunks or knitting the document
+```
+
+# Introduction
+
+The goals of this R Markdown document are to:
+
+* Create Assessment summary Table and calculate Harvest Rate in the fishery year.
+* Write TAF data tables
+
+Files before (inside "model_01_raising_to_international"):
+
+* fishery_summary_FU2021.csv
+
+
+Files before (inside "model_02_kriging"):
+
+* Labadie_Summary_ADG_method_2024.csv
+
+Files after (inside "output_01_assessment_summary"):
+
+* exp.wgcse_FU2021.csv
+* nep.stock.wgmixfish_FU2021.csv
+* FU2021 UWTV abundance estimates.png
+* FU2021 Mean weights.png
+* FU2021 Harvest_Rate.png
+
+
+
+## Load data files 
+<a href="#top">Back to top</a>
+
+This UWTV data summary ADG file is calculated in Model_02 folder when new survey data is finalised and kriged to calculate abundance.
+Updated UWTV survey series based on Rgeostats kriging method.
+Abundance estimate is used to calculate harvest rate (removals.n/abundance) in the fishery.
+Commercial fishery sampling programme data available since 2012.
+UWTV survey series started in 2013. 
+
+```{r uwtv table}
+
+summ <-read.csv("model/model_01_raising_to_international/fishery_summary_FU2021.csv")
+
+
+tv.res <- read.csv("model/model_02_kriging/Labadie_Summary_ADG_method_2024.csv")
+
+tv <- tv.res[, c("Year", "abund", "ci", "upper", "lower")]
+names(tv) <- c("year", "abund", "ci",  "upper", "lower")
+
+# Create new row - Datacombine
+New1 <- c(2012, NA, NA, NA, NA)
+tv <- InsertRow(tv, NewRow = New1, RowNum = 1)
+
+# calculate hr
+exp <- right_join(summ, tv, by="year") %>% mutate(hr = removals.n/abund*100)
+exp$ogive <- 'annual'
+
+
+#put in same format for report/adg same as FU7- North Sea stocks
+fu2021.exp <- exp[c("year", "int.lan.n", "int.dis.n", "int.lan.wt", "int.dis.wt", 
+                    "removals.n", "prop.removal.ret", "dead.discard.rate.n", "discard.rate.n", "discard.rate.w", 
+                    "mw.lan", "mw.dis", "abund", "ci", "upper", "lower", "hr" )]
+
+
+knitr::kable(fu2021.exp[ ,c(1:8)] , digits=4)
+knitr::kable(fu2021.exp[ ,c(1, 9:17)] , digits=4)
+
+
+fileOut <- paste("output/output_01_assessment_summary/exp.wgcse_", fu.n, ".csv", sep = "")
+
+if (save.tables == T) {
+    write.table(fu2021.exp, fileOut, sep=",", row.names = F)
+}
+```
+
+## Reformat for WGMIXFISH Stock object
+<a href="#top">Back to top</a>
+
+```{r mixfish table}
+
+mix <- exp[c("year","abund", "ci", "int.lan.n", "int.dis.n", "removals.n", "hr", 
+             "int.lan.wt", "int.dis.wt","discard.rate.n","dead.discard.rate.n",
+             "mw.lan", "mw.dis","discard.rate.w", "prop.removal.ret")]
+
+mix$survival.rate <- "0.25"
+mix$survival.rate <- as.numeric(mix$survival.rate)
+
+mix <- mix %>%
+  add_column(fu = "fu.2021",
+             .before = "year") %>%
+  mutate(discard.rate.n = (discard.rate.n/100), 
+         dead.discard.rate.n = (dead.discard.rate.n/100),
+         discard.rate.w = (discard.rate.w/100))
+
+names(mix) <- c("fu", "year", "abund", "ci", "landings.n", "discards.n", "removals.numbers", "harvest.rate", "landings.t", "discards.t", 
+                "discard.rate.n", "dead.disc.rate.n", "mean.wt.lan.gr", "mean.wt.dis.gr", "discard.rate.wgt", "prop.removal.ret.n", "survival.rate")
+
+fileOut <- paste("output/output_01_assessment_summary/nep.stock.wgmixfish_", fu.n, ".csv", sep = "")
+
+if (save.tables == T) {
+    write.table(mix, fileOut, sep=",", row.names = F)
+}
+
+tail(mix)
+```
+
+
+## Plot TV abundance and Confidance Intervals and MSY Btrigger.
+<a href="#top">Back to top</a>
+
+Btrigger reference point estimated at 450 million by WGCSE 2021.
+
+```{r abund, echo=FALSE, warning=FALSE, fig.cap="FU2021 UWTV abundance estimates (millions of individuals) and Btrigger displayed as dashed line."}
+
+tvd <- fu2021.exp %>% filter (year >= '2013')
+
+    ggplot(tvd, aes(x=year, y= abund)) +
+          theme_bw() +
+          geom_errorbar(aes(ymax=upper, ymin=lower, width=0.25)) +
+          geom_line(size = 1) +
+          geom_point() +
+          theme(panel.grid = element_blank()) +
+          scale_x_continuous(name="\nYear",
+                             breaks = seq(min(tvd$year), max(tvd$year), 1)) +
+          scale_y_continuous(name = "Abundance (millions)\n",
+                             breaks = seq(0, max(tvd$upper)+100, 250),
+                             limits = c(0, max(tvd$upper)+100)) + 
+          geom_hline(aes(yintercept=450),colour="#990000",linetype="dashed",size = 0.9) 
+
+    
+if (save.plots == T) {
+  ggsave("output/output_01_assessment_summary/FU2021_UWTV_Survey.png")
+}
+```
+
+
+## Plot of estimated mean weights from National sampling programme.
+<a href="#top">Back to top</a>
+
+Plot mean weights (grs) in landings and discards.
+
+```{r mw, echo=FALSE, warning=FALSE, fig.cap="FU2021 Mean weights in grs series.Mean weight landings (black line) and mean weight discards (blue line)."}
+
+mw <- fu2021.exp [ , c(1, 11,12)]
+mw <- mw %>% gather("mw.lan", "var",2:3)
+names(mw) <- c("year", "type", "wgt")
+
+p3 <- ggplot(mw, aes(x=year, y=wgt, group=type, colour=factor(type))) + 
+        geom_line(size=.75)  +  theme_bw() +
+        xlab("\nYear") +
+       scale_y_continuous(name = "Mean weight (gr)\n",
+                          limits = c(0, 50),
+                          breaks = seq(0, 50, 5)) +
+        scale_colour_manual(labels=c("Discards mean weight", "Landings mean weight"), values=c("black","blue")) +
+        theme(panel.grid=element_blank(), legend.position = "bottom") +
+  scale_x_continuous(breaks = c(seq(min(mw$year), max(mw$year), by = 2), max(mw$year)))
+  
+ 
+p3 + theme(axis.text=element_text(size=10),axis.title=element_text(size=10)) + theme(legend.title=element_blank()) 
+
+if (save.plots == T) {
+  ggsave("output/output_01_assessment_summary/FU2021_Mean_weights.png")
+}
+```
+
+
+## Plot of Harvest Rates Updated Survey series
+<a href="#top">Back to top</a>
+
+Current MSY Harvest Rate of 6.0 % for FU2021.
+
+Refer to WGCSE FU2021 report section and recent Marine Institute UWTV report FU2021. 
+
+```{r hr, echo=FALSE, warning=FALSE, fig.cap="FU2021 Harvest Rate series."}
+
+p4 <- ggplot(fu2021.exp, aes(year, hr)) + geom_line(size = 1) +
+    theme_bw() + coord_cartesian(ylim= c(0, 20), xlim=c(2012,dat.year)) + 
+    ylab("Harvest rate percent") +
+  scale_x_continuous(breaks = c(seq(min(fu2021.exp$year), max(fu2021.exp$year), by = 2), max(fu2021.exp$year)))
+
+
+p4 + geom_hline(aes(yintercept=6.0),size = 1,colour="blue", linetype="dashed") + theme(axis.text=element_text(size=10),axis.title=element_text(size=10)) 
+
+if (save.plots == T) {
+  ggsave("output/output_01_assessment_summary/FU2021_Harvest_Rate.png")
+}
+```
+
+
+
+## Session
+<a href="#top">Back to top</a>
+```{r info , echo=TRUE, warning=FALSE, fig.height=8, fig.width=8}
+session_info()
+```
+

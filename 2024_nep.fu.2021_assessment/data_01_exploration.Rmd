@@ -1,0 +1,557 @@
+---
+title: "data_01_exploration of Irish and French fishery data"
+author: "WGCSE"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    number_sections: true
+    toc_depth: 3
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r libs, message=FALSE, echo=TRUE, warning=FALSE}
+gc()
+rm(list=ls())
+
+library(RODBC)
+library(tidyverse)
+library(lattice)
+library(lubridate)
+library(mapplots)
+library(sp)
+library(sf)
+library(reshape2)
+library(readxl)
+library(knitr)
+library(DataCombine)
+library(lattice)
+library(icesTAF)
+library(magrittr)
+library(viridis)
+library(sessioninfo)
+library(stringr)
+```
+# Setup options
+
+```{r setupoptions}
+curr.year <- 2024
+dat.year <- curr.year -1
+fu.n <- "FU2021"
+
+save.plots <- T # set it up as T or F whether you want to save the plots when running all the chunks or kniting the document
+save.tables <- T # set it up as T or F whether you want to save the tables "propmature"" and the "L50" into .txt files when running all the chunks or knitting the document
+
+# ewen plot
+source("bootstrap/software/functions/required.funcs.r")
+source("bootstrap/software/functions/ld1.plot.r")
+```
+
+# Introduction
+
+The goals of this R Markdown document are to:
+
+* Preprocess and explore FU2021 Intercatch data for France and Ireland Sampling programmes
+* Write TAF data tables
+
+Files before (inside "bootstrap/data/"):
+
+* intercatch folder
+  * france.lfd.wgcse2019.csv
+  * fu2021.alfd.hist2024.csv
+  * fu2021.alfd.series2024.csv
+  * fu2021.df.all.csv
+  * fu2021.nat.alfd.2024.csv
+  * fu2021.sam4.2024.csv
+  * int.land.csv
+  * ireland.lfd.wgcse2022.csv
+  * MSY_nep_stock.csv
+  * NepLand_WGCSE2024.csv
+  * qtr.int.land.csv
+
+Files after (inside "data_01_exploration"):
+
+
+* national_landings_FU2021.csv
+* international_landings_FU2021.csv
+* discard.data_FU2021.csv
+* IRE_meansize_FU2021.csv
+* exp.country_FU2021.csv
+* prop.male_FU2021.csv
+
+* FU2021_National Landings qtr.png
+* FU2021_International Landings.png
+* FU2021_Discard Rate.national.programme.png
+* FU2021_IRE.commercial.lfd.png
+* FU2021_Mean_weights_country.png
+* FU2021_LFD_country.png
+* FU2021_proportion_male_landings.png
+* FU2021_LFD.plot.png
+
+
+# Data Work Up
+<a href="#top">Back to top</a>
+
+This Rmarkdown document gives the exploitation pattern from the raised numbers from Irish Sampling programme.
+Then load in the Frence fishery and sampling data up to 2018.
+Then raises to the international landings for this stock.
+
+## National Landings.
+<a href="#top">Back to top</a>
+
+```{r nat land, echo=TRUE, message=FALSE, fig.height=10, fig.width=7, warning=FALSE, fig.cap="FU2021 Irish  Landings (t) by quarter."}
+nat <- read.csv("bootstrap/data/intercatch/NepLand_WGCSE2024.csv")
+
+nat.land <- nat %>% filter(FU ==2021)
+
+nat.land <- nat.land[c(1:8)]
+nat.land$LiveWt <- nat.land$LiveWt/1000
+
+nat.land$Quarter <- as.factor(nat.land$Quarter)
+
+ggplot(nat.land, aes(Year, LiveWt))+ geom_col(aes(fill = Quarter)) + 
+       theme_bw() + ylab("Landings in Tonnes") + 
+  theme(panel.grid.major=element_blank(), panel.grid.minor=element_blank()) +
+  scale_x_continuous(breaks = c(seq(min(nat$Year), max(nat$Year), by = 5), max(nat$Year))) +
+  scale_y_continuous(breaks = seq(0, 2500, 200))
+
+if (save.plots == T) {
+  ggsave("data/data_01_exploration/FU2021_national_landings_qtr.png")
+}
+
+nl <- nat.land %>% group_by(Year, Quarter) %>% summarise(tot =sum(LiveWt)) 
+
+nl <- nl %>% spread( Quarter, -Year)
+
+nl$Total<- rowSums(nl[,2:5], na.rm=TRUE)
+
+knitr::kable(nl , digits=3)
+
+fileOut <- paste("data/data_01_exploration/national_landings_", fu.n, ".csv", sep = "")
+
+ if (save.tables == T) {
+   write.table(nl, fileOut, sep=",", row.names = F)
+ }
+
+```
+
+
+## International Landings 
+<a href="#top">Back to top</a>
+
+In 2019 downwards revision (-50%) to UK-England catch data.
+
+```{r int land, echo=TRUE, fig.height=10, fig.width=7, message=FALSE, warning=FALSE, fig.cap="FU2021 International Landings (t) ."}
+int.land <- read.csv("bootstrap/data/intercatch/int.land.csv")
+
+knitr::kable(int.land , digits=4)
+
+int.land <- gather(int.land,"country", "landings",2:5) 
+
+
+
+pi <- ggplot(int.land, aes(Year, landings, fill=country)) + geom_bar(stat="identity", position= "stack") + 
+  theme_bw() + ylab("Landings in Tonnes") +
+  scale_fill_manual(breaks = c("France", "Belgium", "Ireland", "UK"),
+                     values=c("#56B4E9","#E69F00","#009E73", "#CC6666")) +
+  theme(panel.grid.major=element_blank(), panel.grid.minor=element_blank()) +
+  scale_x_continuous(breaks = c(seq(min(int.land$Year), max(int.land$Year), by = 5), max(int.land$Year))) +
+  scale_y_continuous(breaks = seq(0, 3800, 200))
+
+pi + theme(axis.text=element_text(size=10),axis.title=element_text(size=10)) 
+
+
+if (save.plots == T) {
+  ggsave("data/data_01_exploration/FU2021_International Landings.png")
+}
+
+
+int.land <- int.land %>% mutate_all(funs(replace(., is.na(.), 0)))
+
+int <- int.land %>% group_by(Year) %>% summarise(total=sum(landings))
+names(int) <- c("year","total")
+int$year  <- as.numeric(int$year)
+
+fileOut <- paste("data/data_01_exploration/international_landings_", fu.n, ".csv", sep = "")
+
+ if (save.tables == T) {
+   write.table(int, fileOut, sep=",", row.names = F)
+ }
+
+```
+
+
+## Load Irish fishery data 
+<a href="#top">Back to top</a>
+
+Load in national raised annual LFD object for data series 2012-2021.
+This is calculated in 03_FU2021_InternationalDataRaising.rmd file held on national network.
+Aggregated data set.
+
+```{r data load, echo=FALSE, results='true'}
+#historic aggregated data SALY
+alfd.hist <- read.csv("bootstrap/data/intercatch/fu2021.alfd.hist2024.csv")
+alfd.hist <-  alfd.hist[ , c(-1)]
+
+
+alfd.wg <- read.csv("bootstrap/data/intercatch/fu2021.alfd.series2024.csv")
+alfd.wg <-  alfd.wg[ , c(-1)]
+```
+
+
+## Data Table of estimated discard rates by number and weight from the Irish national sampling programme.
+<a href="#top">Back to top</a>
+
+```{r dis data1, echo=TRUE, fig.height=7, fig.width=7, warning=FALSE}
+
+hist1 <- alfd.hist[,c("year", "tot.ln", "tot.dn", "removals.n", "dead.discard.rate.n","discard.rate.w","discard.rate.n", "tot.lw", "tot.dw",  "mw.lan", "mw.dis")]
+
+
+hist1 <- hist1[,c("year","tot.ln", "tot.dn", "removals.n", "discard.rate.n", "discard.rate.w", "tot.lw", "tot.dw", "mw.lan", "mw.dis")]  
+names(hist1) <- c("year","lan.num","dis.num","removals.n", "dis.rate.n", "dis.rate.wgt","lan.wgt", "dis.wgt", "mw.lan", "mw.dis")
+
+
+
+summ <- alfd.wg %>% group_by(year) %>% summarise(lan.num=sum(rlan.n)/1000,
+                                                dis.num=sum(rdis.n)/1000,
+                                                lan.wgt=sum(rlan.wt),
+                                                 dis.wgt=sum(rdis.wt)) %>% 
+                                      mutate(removals.n = dis.num *0.75 + lan.num,
+                                             dis.rate.n=dis.num/(lan.num+dis.num)*100,
+                                             dis.rate.wgt=dis.wgt/(lan.wgt+dis.wgt)*100,
+                                              mw.lan = lan.wgt/lan.num,
+                                              mw.dis = dis.wgt/dis.num)
+
+
+summ <- summ[,c("year", "lan.num", "dis.num","removals.n","dis.rate.n", "dis.rate.wgt", "lan.wgt", "dis.wgt", "mw.lan", "mw.dis")]
+summ1 <- rbind(as.data.frame(hist1),  as.data.frame(summ))
+
+dis <- summ1
+
+knitr::kable(dis , digits=4)
+
+fileOut <- paste("data/data_01_exploration/discard.data_", fu.n, ".csv", sep = "")
+
+ if (save.tables == T) {
+   write.table(dis, fileOut, sep=",", row.names = F)
+ }
+
+```
+
+
+
+## Plot the estimated discard rates by number and weight from the Irish national sampling programme.
+<a href="#top">Back to top</a>
+
+```{r dis data2, echo=TRUE, fig.height=7, fig.width=7, warning=FALSE, fig.cap="Discard rates by number (red-line) and weight (blue-line) from national sampling programme."}
+
+viridis_colors <- viridis_pal()(3)
+
+dis <- dis[c(1, 5:6)]
+dis <- dis %>% gather("disw","var" ,2:3)
+names(dis) <- c("year", "type", "rate")
+
+p1 <- ggplot(dis, aes(year, rate, group = type, colour=factor(type))) + 
+  geom_line(size = 1) + 
+  coord_cartesian(ylim= c(0, 100)) +
+      ylab("% Discard rate") + 
+  scale_colour_viridis_d(name = "Type", option = "D", end = 0.9) +  # Using color-blind friendly palette
+  theme_bw() +
+  scale_x_continuous(breaks = c(seq(min(dis$year), max(dis$year), by = 2), max(dis$year))) +
+  theme(axis.text=element_text(size=11),
+        axis.title=element_text(size=11),
+        legend.title=element_blank(),
+        panel.grid=element_blank(),
+        legend.position = "bottom")
+
+if (save.plots == T) {
+  ggsave("data/data_01_exploration/FU2021_Discard Rate.national.programme.png")
+}
+
+```
+
+
+## Irish Length Frequency Distribution Plot.
+<a href="#top">Back to top</a>
+
+Plot the Irish commercial length frequency distribution.
+This is from the "exel" workup as was presented at previous WGs.
+
+```{r lfd, echo=FALSE, results='true', fig.height=10, fig.width=7, fig.cap="FU2021 Irish Raised LFD and mean size displayed where black line = mean size in landings and red line = mean size in discards."}
+viridis_colors <- viridis_pal()(3)
+
+rldf <- read.csv("bootstrap/data/intercatch/ireland.lfd.wgcse2022.csv") 
+
+l <- alfd.wg %>% select("year","cl", "rlan.n", "sex") %>% mutate(type=c("landings")) %>% rename("n" = "rlan.n")
+d <- alfd.wg %>% select("year","cl", "rdis.n", "sex") %>% mutate(type=c("discards")) %>% rename("n" = "rdis.n")
+dat <- rbind(l,d)
+
+
+rldf <- rbind(rldf, dat)
+
+head(rldf)
+#ggplot(rldf, aes(x=cl, y= n, fill=type)) + geom_bar(stat="identity") + facet_grid(year~sex)
+
+p <- ggplot(rldf, aes(x = cl, y = n, fill = type)) + 
+  geom_bar(stat = "identity") +
+  scale_fill_viridis_d() 
+
+rldf$cl.n <- rldf$cl * rldf$n
+
+#get mean for lfd
+vline.data <- rldf %>%
+  group_by(year, sex, type) %>%
+  summarise(mean = sum(cl.n) / sum(n))
+#tail(vline.data)
+
+fileOut <- paste("data/data_01_exploration/IRE.meansize_", fu.n, ".csv", sep = "")
+
+ if (save.tables == T) {
+   write.table(vline.data, fileOut, sep=",", row.names = F)
+ }
+
+vline.l <- filter(vline.data, type == "landings")
+vline.d <- filter(vline.data, type == "discards")
+
+p <- ggplot(rldf, aes(x = cl, y = n, fill = type)) + 
+  geom_bar(stat = "identity") +
+  scale_fill_manual(values = viridis_colors) +  # Using Viridis palette
+  facet_grid(year ~ sex) + 
+  geom_vline(aes(xintercept = mean), data = vline.l, colour = "black", linetype = "solid") +
+  geom_vline(aes(xintercept = mean), data = vline.d, colour = "red", linetype = "solid") +
+  theme_bw() + 
+  theme(panel.grid = element_blank(), legend.position = "bottom")
+
+p
+
+if (save.plots == T) {
+  ggsave("data/data_01_exploration/FU2021_IRE.commercial.lfd.png")
+}
+
+```
+
+## Load French fishery data set.
+<a href="#top">Back to top</a>
+
+This is from the "exel" workup as was presented at previous WGs.
+Read in French data provided by national expert via excel file for years (2012-2018).
+No sample data from France since 2018.
+Then present table the fishery summary for Ireland and France:
+Landings and discards by number and weight, removals number, dead discard rate by number, discard rate by weight and number and finally 
+mean weight in landings and discards.
+
+```{r fra, echo=FALSE, results='true', fig.height=10, fig.width=7}
+
+load("bootstrap/data/intercatch/france.fu2021summary.wgcse2019.rdata")
+
+fr.dat <- c3
+names(fr.dat) <- c("year","lan.num","dis.num","removals.n", "dead.discard.rate.n", "dis.rate.n", "dis.rate.wgt","lan.wgt", "dis.wgt", "mw.lan", "mw.dis")
+fr.dat$nation <- "France"
+
+summ2 <- summ1 %>% mutate(dead.discard.rate.n=(1- lan.num /removals.n)*100, .before=5) %>% mutate(nation="Ireland")
+
+
+dat.all <- rbind(as.data.frame(fr.dat), as.data.frame(summ2))
+
+#dead.discard.rate.n =  (1- lan.num /removals.n)*100,
+
+knitr::kable(dat.all, digits=3)
+
+fileOut <- paste("data/data_01_exploration/exp.country_", fu.n, ".csv", sep = "")
+
+ if (save.tables == T) {
+   write.table(dat.all, fileOut, sep=",", row.names = F)
+ }
+
+```
+
+
+
+## Comparison of Irish and French mean weight data
+<a href="#top">Back to top</a>
+
+Plot the mean weights from both national fisheries.
+
+```{r mw, echo=FALSE, results='true', fig.height=5, fig.width=7, fig.cap="Mean weight (gr) in the sampled catches by sex for each country."}
+dat.wgt<- dat.all[ , c(1, 10:12)]
+
+
+dat.wgt <- dat.wgt %>% gather("mw.lan", "var",2:3)
+names(dat.wgt) <- c("year", "source", "type", "wgt")
+
+
+pw <- ggplot(dat.wgt, aes(x=year, y=wgt, group=as.factor(type), colour=factor(type))) + 
+        geom_line(size=.75)  +  theme_bw() + 
+        ylab("Mean weight grs") +
+        coord_cartesian(ylim=c(0, 85)) +
+        facet_grid(~source) +
+  scale_x_continuous(breaks = c(seq(min(dis$year), max(dis$year), by = 2), max(dis$year)))  +
+  scale_colour_manual(values = viridis_colors)
+ 
+pw + theme(axis.text=element_text(size=10),axis.title=element_text(size=12)) + 
+  theme(legend.title=element_blank(), panel.grid=element_blank(), legend.position = "bottom") 
+ 
+
+if (save.plots == T) {
+  ggsave("data/data_01_exploration/FU2021_Mean_weights_country.png")
+}
+
+t <- dat.wgt %>% spread(source, wgt)
+
+knitr::kable(t, digits=3)
+```
+
+
+
+## Commercial Length Frequency data for France and Ireland.
+<a href="#top">Back to top</a>
+
+Plot the mean weights from both national fisheries.
+```{r comblfd, echo=FALSE, results='true', fig.height=10, fig.width=7, fig.cap="RLFD by country by type displaying mean size"}
+fr.rldf <- read.csv("bootstrap/data/intercatch/france.lfd.wgcse2019.csv")
+fr.rldf <-  fr.rldf[ ,c(-1)]
+fr.rldf$source <- "France"
+
+levels(fr.rldf$sex)
+
+fr.rldf <- mutate_if(fr.rldf, is.factor, str_replace_all, pattern = "male", replacement = "Male")
+fr.rldf <- mutate_if(fr.rldf, is.character, str_replace_all, pattern = "feMale", replacement = "Female")
+
+names(fr.rldf) <- c("year",	"cl",	"n",	"sex", "type",	"source")
+
+# Select relevant columns for Ireland and preprocess
+ir.rldf <- rldf[, 1:5]
+ir.rldf$source <- "Ireland"
+
+# Combine datasets
+dat <- rbind(ir.rldf, fr.rldf)
+
+p <- ggplot(dat, aes(x=cl, y= n, fill=type)) + geom_bar(stat="identity") + facet_grid(year~source) + theme_bw()
+
+p +  geom_vline(aes(xintercept= 25)) + geom_vline(aes(xintercept=35), linetype='dashed') + 
+ theme(panel.grid=element_blank(), legend.position = "bottom") +
+    scale_fill_viridis_d(name = "Type", option = "D", end = 0.9)
+
+if (save.plots == T) {
+  ggsave("data/data_01_exploration/FU2021_LFD_country.png")
+}
+
+```
+
+
+## Proportion of Males in the landings.
+<a href="#top">Back to top</a>
+
+Report data table of proportion males in landings by number.
+```{r pro, echo=FALSE, results='true', fig.height=5, fig.width=7, fig.cap="Proportion Males in the landings by country"}
+
+pf <- dat %>% filter(type== 'landings', source=='France') %>% 
+  group_by(year, sex) %>% 
+  summarise(tot= sum(n)) %>% 
+  spread(sex, tot)
+
+pf$total<- rowSums(pf[,2:3], na.rm=TRUE)
+names(pf) %<>% tolower
+pf <- pf %>% 
+      mutate(pro.m= round(male/total*100))
+pf$country <- "France"
+
+
+pi <- dat %>% 
+  filter(type== 'landings', source=='Ireland') %>% 
+  group_by(year, sex) %>% 
+  summarise(tot= sum(n)) %>% 
+  spread(sex, tot)
+
+pi$total<- rowSums(pi[,2:3], na.rm=TRUE)
+names(pi) %<>% tolower
+pi<- pi %>% mutate(pro.m= round(male/total*100))
+pi$country <- "Ireland"
+
+pro <- rbind(pf, pi)
+
+knitr::kable(pro, digits=3)
+
+fileOut <- paste("data/data_01_exploration/prop.male_", fu.n, ".csv", sep = "")
+
+ if (save.tables == T) {
+   write.table(pro, fileOut, sep=",", row.names = F)
+ }
+
+
+p1 <- ggplot(pro, aes(as.factor(year), pro.m, group = country, colour=factor(country))) + geom_line(size = 1) +
+  coord_cartesian(ylim= c(0, 100)) + 
+  ylab("Proportion Male (%)") + xlab(" year") +
+  theme_bw() +
+  scale_colour_viridis_d(name = "Country", option = "D", end = 0.9)
+
+p1 + theme(axis.text=element_text(size=10) +theme(legend.title=element_blank()) +
+      theme(panel.grid=element_blank(), legend.position = "bottom"))
+  
+
+if (save.plots == T) {
+  ggsave("data/data_01_exploration/FU2021_proportion_male_landings.png")
+}
+
+```
+
+## Commercial Length Frequency Distributions
+<a href="#top">Back to top</a>
+
+Here we write the data  in the format for the ld1.plot.
+The vertical lines indicate the minimum conservation reference size (25 mm) and the 35 mm visual reference level.
+
+```{r ep , echo=TRUE, warning=FALSE, fig.height=8, fig.width=8, fig.cap="FU2021 Raised LFD and mean size displayed where black line = mean size in landings and red line = mean size in discards."}
+lf <- dat
+
+lf <- lf %>%
+  mutate(sex = ifelse(sex == "male", "Male",
+               ifelse(sex == "female", "Female", sex)))
+
+lfg <- lf %>% group_by( year, cl, sex, type) %>% summarise(num = sum(n))
+fu2021.ld <- spread(lfg, type, num)
+fu2021.ld$Catch <- fu2021.ld$discards  + fu2021.ld$landings
+names(fu2021.ld) <- c("Year",  "Length", "Sex", "Discards", "Landings", "Catch")
+## here we write the CSV file in the fromat for the ld1.plot
+
+##Ewen Plot
+#get some length frequency data in
+df <- as.data.frame(fu2021.ld)
+#summary(df)
+
+#the names of the data must be
+#Year, Sex, Length, Landings, Discards, Catch
+#in this instance they already are so we don't have to worry about it.
+#call the function, parameter order is
+#1 data frame
+#2 title for the plot
+#3 minimum year to start from
+#4 maximum year to run to
+#5 Minimum landing size
+#6 reference line (typically 35mm so that we can see the proportion of the stock which is considered #fully selected.
+
+
+png("data/data_01_exploration/FU2021_LFD.plot.png", height=1700, width=1200, res=200)
+
+plot.ld(df, "FU2021", 2012, 2023, 25, 35)
+
+dev.off()
+
+plot.ld(df, "FU2021", 2012, 2023, 25, 35)
+
+```
+
+
+## Session
+<a href="#top">Back to top</a>
+```{r info , echo=TRUE, warning=FALSE, fig.height=8, fig.width=8}
+session_info()
+
+```
